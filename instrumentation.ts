@@ -1,5 +1,5 @@
 // Runs once when the Next.js server starts (Node runtime only). It schedules a
-// node-cron job that hits the /api/cron/prune route every minute to delete
+// node-cron job that hits the /api/cron/prune route every hour to delete
 // expired custom rooms. We trigger it over HTTP (rather than importing the
 // Mongo code here) so this file stays free of Node-only deps that the edge
 // compiler can't bundle.
@@ -18,8 +18,8 @@ export async function register() {
   const secret = process.env.CRON_SECRET;
   const url = `${base}/api/cron/prune${secret ? `?key=${secret}` : ""}`;
 
-  // Every minute: ask the prune route to delete expired custom rooms.
-  cron.schedule("* * * * *", async () => {
+  // Every hour: ask the prune route to delete expired custom rooms.
+  cron.schedule("0 * * * *", async () => {
     try {
       const res = await fetch(url);
       const data = await res.json();
@@ -29,5 +29,5 @@ export async function register() {
     }
   });
 
-  console.log("[cron] room-expiry job scheduled (every minute)");
+  console.log("[cron] room-expiry job scheduled (every hour)");
 }
