@@ -69,9 +69,14 @@ export default function VoiceCall({ roomId }: { roomId: string }) {
         <Radio className="mx-auto text-slate-400" size={48} />
         <h1 className="mt-4 text-2xl font-bold">Couldn&apos;t connect</h1>
         <p className="mt-2 text-slate-400">{v.error}</p>
-        <button onClick={() => { v.leave(); router.push("/voice"); }} className="btn-primary mt-6">
-          Back to lobby
-        </button>
+        <div className="mt-6 flex flex-col items-center justify-center gap-3 sm:flex-row">
+          <button onClick={() => v.retry()} className="btn-primary inline-flex items-center gap-2">
+            <Mic size={18} /> Try again
+          </button>
+          <button onClick={() => { v.leave(); router.push("/voice"); }} className="btn-ghost">
+            Back to lobby
+          </button>
+        </div>
       </div>
     );
   }

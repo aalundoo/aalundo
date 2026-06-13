@@ -20,11 +20,14 @@ export async function generateMetadata({
 
   const title = `${room.name} · Aalundo`;
   const description = room.description || "Join this live voice room on Aalundo.";
+  // Use the room's own icon image for link previews when it has one; otherwise
+  // fall back to the generated opengraph-image route.
+  const images = room.image ? [room.image] : undefined;
   return {
     title,
     description,
-    openGraph: { title, description, type: "website" },
-    twitter: { card: "summary_large_image", title, description },
+    openGraph: { title, description, type: "website", ...(images && { images }) },
+    twitter: { card: "summary_large_image", title, description, ...(images && { images }) },
   };
 }
 

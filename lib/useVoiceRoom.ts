@@ -32,6 +32,9 @@ export function useVoiceRoom(roomId: string | null) {
   const [muted, setMuted] = useState(false);
   const [deafened, setDeafened] = useState(false);
   const [speaking, setSpeaking] = useState<Record<string, boolean>>({});
+  // Bumping this re-runs the connect effect — lets the user re-request mic
+  // access (or recover from a transient failure) without reloading the page.
+  const [retryNonce, setRetryNonce] = useState(0);
 
   const esRef = useRef<EventSource | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -199,10 +202,13 @@ export function useVoiceRoom(roomId: string | null) {
     (async () => {
       let stream: MediaStream;
       try {
+        // This is what surfaces the browser's "Allow microphone?" prompt. If the
+        // user previously dismissed it, calling again re-prompts; if they hard-
+        // blocked it, it throws immediately and we guide them to unblock.
         stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      } catch {
+      } catch (err) {
         if (!cancelled) {
-          setError("Microphone access was blocked. Allow it and reload to join.");
+          setError(await micErrorMessage(err));
           setStatus("error");
         }
         return;
@@ -269,7 +275,7 @@ export function useVoiceRoom(roomId: string | null) {
       acRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId]);
+  }, [roomId, retryNonce]);
 
   // ---- controls -----------------------------------------------------------
   const toggleMute = useCallback(() => {
@@ -281,6 +287,14 @@ export function useVoiceRoom(roomId: string | null) {
       return next;
     });
   }, [post]);
+
+  // Re-attempt the connection — chiefly to re-trigger the mic permission
+  // prompt after a failure, without forcing a full page reload.
+  const retry = useCallback(() => {
+    setError(null);
+    setStatus("connecting");
+    setRetryNonce((n) => n + 1);
+  }, []);
 
   const toggleDeafen = useCallback(() => {
     setDeafened((d) => {
@@ -307,5 +321,36 @@ export function useVoiceRoom(roomId: string | null) {
     speaking,
     toggleMute,
     toggleDeafen,
+    retry,
   };
+}
+
+// Turn a getUserMedia rejection into a friendly, actionable message. When the
+// prompt was hard-blocked we say how to unblock; when it was merely dismissed
+// (state still "prompt") we tell them to try again and choose Allow.
+async function micErrorMessage(err: unknown): Promise<string> {
+  const name = (err as DOMException | undefined)?.name;
+
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    let state: PermissionState | null = null;
+    try {
+      const res = await navigator.permissions?.query({
+        name: "microphone" as PermissionName,
+      });
+      state = res?.state ?? null;
+    } catch {
+      /* Permissions API unsupported (e.g. some Safari versions) — fall through */
+    }
+    if (state === "denied") {
+      return "Microphone access is blocked. Open this site's permissions (tap the lock or “aA” icon next to the address bar), allow the microphone, then tap Try again.";
+    }
+    return "We need your microphone to connect you. Tap Try again and choose Allow when your browser asks.";
+  }
+  if (name === "NotFoundError" || name === "OverconstrainedError") {
+    return "No microphone was found. Connect one or check your device settings, then tap Try again.";
+  }
+  if (name === "NotReadableError") {
+    return "Your microphone is being used by another app. Close it, then tap Try again.";
+  }
+  return "We couldn't access your microphone. Check that your browser allows it, then tap Try again.";
 }
