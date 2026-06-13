@@ -214,6 +214,21 @@ export function useVoiceRoom(roomId: string | null, user: PeerUser | null) {
     const id = m.connectionId;
     if (!id || id === selfIdRef.current) return;
     const u = presenceUser(m);
+
+    // Never peer with another connection that belongs to us (a ghost lingering
+    // after a reload, or the same account in another tab) — that would draw a
+    // duplicate tile of ourselves.
+    if (u.id !== "guest" && u.id === userRef.current?.id) return;
+
+    // If this user is already here under a different connectionId, it's a stale
+    // connection (e.g. they reloaded before their old presence timed out) —
+    // drop the old one so each person shows exactly once.
+    const stale: string[] = [];
+    for (const [pid, pu] of membersRef.current) {
+      if (pid !== id && pu.id !== "guest" && pu.id === u.id) stale.push(pid);
+    }
+    stale.forEach(removePeer);
+
     membersRef.current.set(id, u);
     createPeer(id, u, selfIdRef.current > id);
   }
