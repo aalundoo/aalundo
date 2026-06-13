@@ -2,8 +2,9 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Mic, MicOff, Volume2, VolumeX, PhoneOff, Link2, Search, Radio } from "lucide-react";
+import { Mic, MicOff, Volume2, VolumeX, PhoneOff, Link2, Search, Radio, AlertTriangle } from "lucide-react";
 import { roomTheme } from "@/lib/voice-rooms";
+import { useMicPermission } from "@/lib/useMicPermission";
 import { useVoice } from "./VoiceProvider";
 import RoomIcon from "./RoomIcon";
 
@@ -116,6 +117,32 @@ function PreJoin({
   count: number; limit: number; expiresAt?: number; onJoin: () => void;
 }) {
   const full = count >= limit;
+  const micPerm = useMicPermission();
+  const micBlocked = micPerm === "denied";
+  const needsPrompt = micPerm === "prompt";
+  const [requesting, setRequesting] = useState(false);
+
+  // Calling getUserMedia from this click is what surfaces the browser's
+  // "Allow microphone?" dialog. When it's still in the "prompt" state we ask
+  // first and only continue into the room once the user allows it — so a
+  // dismissed prompt leaves them here (with guidance) instead of erroring out.
+  async function requestAndJoin() {
+    if (!needsPrompt) {
+      onJoin(); // granted / unknown / blocked → let the connect flow handle it
+      return;
+    }
+    setRequesting(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      stream.getTracks().forEach((t) => t.stop()); // release; the room re-acquires it
+      onJoin();
+    } catch {
+      /* dismissed/blocked — useMicPermission updates and guidance shows below */
+    } finally {
+      setRequesting(false);
+    }
+  }
+
   return (
     <div className="mx-auto flex max-w-md flex-col items-center px-6 pt-10 text-center">
       <div className="animate-fade-up">
@@ -128,11 +155,43 @@ function PreJoin({
           : `Be the first one in · up to ${limit}`}
         {expiresAt ? " · expires in " + hoursLeft(expiresAt) : ""}
       </p>
-      <button onClick={onJoin} disabled={full} className="btn-primary mt-8 inline-flex w-full items-center justify-center gap-2 py-4 text-base animate-fade-up [animation-delay:180ms]">
-        <Mic size={18} /> {full ? "Room is full" : "Join voice"}
+
+      {micBlocked && (
+        <div className="mt-6 w-full animate-fade-up rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-left text-sm text-amber-200/90 [animation-delay:150ms]">
+          <div className="flex items-center gap-2 font-semibold text-amber-200">
+            <AlertTriangle size={16} /> Microphone is blocked
+          </div>
+          <p className="mt-1.5 text-amber-200/80">
+            Tap the lock or &ldquo;aA&rdquo; icon next to the address bar, allow
+            the microphone for this site, and this will update automatically.
+          </p>
+        </div>
+      )}
+
+      <button
+        onClick={requestAndJoin}
+        disabled={full || requesting}
+        className="btn-primary mt-8 inline-flex w-full items-center justify-center gap-2 py-4 text-base animate-fade-up [animation-delay:180ms]"
+      >
+        <Mic size={18} />{" "}
+        {full
+          ? "Room is full"
+          : requesting
+            ? "Waiting for mic…"
+            : needsPrompt
+              ? "Allow mic & join"
+              : micBlocked
+                ? "Join anyway"
+                : "Join voice"}
       </button>
       <p className="mt-3 text-xs text-slate-500">
-        {full ? "Try again when someone leaves." : "We'll ask for microphone access to connect you."}
+        {full
+          ? "Try again when someone leaves."
+          : micBlocked
+            ? "Allow the microphone above, then join — it's required to connect."
+            : needsPrompt
+              ? "Your browser will ask to use the microphone — choose Allow."
+              : "We'll ask for microphone access to connect you."}
       </p>
     </div>
   );
