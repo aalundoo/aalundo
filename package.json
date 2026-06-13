@@ -10,6 +10,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "ably": "^2.22.1",
     "jose": "^5.9.6",
     "lucide-react": "^1.18.0",
     "mongodb": "^6.21.0",

@@ -7,7 +7,7 @@
 import { randomUUID } from "crypto";
 import { getDb, isDbConfigured } from "./db";
 import { DEFAULT_ROOMS, customGradient, MAX_LIMIT } from "./rooms-data.mjs";
-import { memberCount } from "./signal-hub";
+import { roomMemberCount } from "./ably-presence";
 
 const ROOMS = "rooms";
 const OVERRIDES = "room_overrides";
@@ -35,15 +35,22 @@ export interface RoomOverride {
   limit?: number;
 }
 
-function withCount<T extends { id: string }>(r: T) {
-  return { ...r, count: memberCount(r.id) };
+// Fill live participant counts from Ably presence. Done in one pass over the
+// list (counts are cached briefly in ably-presence) so the lobby stays cheap.
+async function fillCounts(rooms: Room[]): Promise<Room[]> {
+  await Promise.all(
+    rooms.map(async (r) => {
+      r.count = await roomMemberCount(r.id);
+    }),
+  );
+  return rooms;
 }
 
 function mergeDefault(
   base: (typeof DEFAULT_ROOMS)[number],
   ov: RoomOverride | undefined,
 ): Room {
-  return withCount({
+  return {
     id: base.id,
     name: ov?.name ?? base.name,
     description: ov?.description ?? base.description,
@@ -53,7 +60,8 @@ function mergeDefault(
     limit: ov?.limit ?? base.limit,
     custom: false,
     code: base.id.toUpperCase(),
-  });
+    count: 0,
+  };
 }
 
 async function loadOverrides(): Promise<Map<string, RoomOverride>> {
@@ -66,7 +74,7 @@ async function loadOverrides(): Promise<Map<string, RoomOverride>> {
 export async function listAllRooms(): Promise<Room[]> {
   const overrides = await loadOverrides();
   const defaults = DEFAULT_ROOMS.map((r) => mergeDefault(r, overrides.get(r.id)));
-  if (!isDbConfigured()) return defaults;
+  if (!isDbConfigured()) return fillCounts(defaults);
 
   const db = await getDb();
   const docs = await db
@@ -75,21 +83,20 @@ export async function listAllRooms(): Promise<Room[]> {
     .sort({ expiresAt: -1 })
     .toArray();
 
-  const customs = docs.map((d) =>
-    withCount({
-      id: d.id,
-      name: d.name,
-      description: d.description,
-      emoji: d.emoji,
-      image: d.image ?? null,
-      gradient: d.gradient,
-      limit: d.limit,
-      custom: true,
-      code: d.code ?? null,
-      expiresAt: d.expiresAt,
-    }),
-  );
-  return [...defaults, ...customs];
+  const customs: Room[] = docs.map((d) => ({
+    id: d.id,
+    name: d.name,
+    description: d.description,
+    emoji: d.emoji,
+    image: d.image ?? null,
+    gradient: d.gradient,
+    limit: d.limit,
+    custom: true,
+    code: d.code ?? null,
+    expiresAt: d.expiresAt,
+    count: 0,
+  }));
+  return fillCounts([...defaults, ...customs]);
 }
 
 function genCode(): string {
@@ -178,14 +185,16 @@ export async function getRoom(id: string): Promise<Room | null> {
   const base = DEFAULT_ROOMS.find((r) => r.id === id);
   if (base) {
     const overrides = await loadOverrides();
-    return mergeDefault(base, overrides.get(id));
+    const room = mergeDefault(base, overrides.get(id));
+    room.count = await roomMemberCount(id);
+    return room;
   }
   if (!isDbConfigured()) return null;
 
   const db = await getDb();
   const doc = await db.collection(ROOMS).findOne({ id, expiresAt: { $gt: Date.now() } });
   if (!doc) return null;
-  return withCount({
+  return {
     id: doc.id,
     name: doc.name,
     description: doc.description,
@@ -196,7 +205,8 @@ export async function getRoom(id: string): Promise<Room | null> {
     custom: true,
     code: doc.code ?? null,
     expiresAt: doc.expiresAt,
-  });
+    count: await roomMemberCount(id),
+  };
 }
 
 // Resolve a share code -> room. Accepts a default room's id-as-code or a

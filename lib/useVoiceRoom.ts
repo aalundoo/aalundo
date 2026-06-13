@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import * as Ably from "ably";
 
 export interface PeerUser {
   id: string;
@@ -16,6 +17,9 @@ export interface Peer {
 
 type Status = "idle" | "connecting" | "connected" | "error";
 
+// Fallback used if /api/ice can't be reached. STUN-only works on the same
+// network but not across strict/symmetric NATs — configure TURN (TURN_* env)
+// so /api/ice can hand out a relay.
 const ICE_CONFIG: RTCConfiguration = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
@@ -25,35 +29,44 @@ const ICE_CONFIG: RTCConfiguration = {
 
 const SPEAK_THRESHOLD = 0.045;
 
-export function useVoiceRoom(roomId: string | null) {
+// Signaling runs over an Ably realtime channel (browser <-> Ably), so it works
+// on serverless hosts and across instances. Each browser connection is one
+// presence member; peers are identified by their Ably connectionId.
+export function useVoiceRoom(roomId: string | null, user: PeerUser | null) {
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
   const [peers, setPeers] = useState<Peer[]>([]);
   const [muted, setMuted] = useState(false);
   const [deafened, setDeafened] = useState(false);
   const [speaking, setSpeaking] = useState<Record<string, boolean>>({});
+  // Whether we have a working local mic. When false the user is in listen-only
+  // mode — they can hear everyone but can't transmit.
+  const [hasMic, setHasMic] = useState(false);
   // Bumping this re-runs the connect effect — lets the user re-request mic
   // access (or recover from a transient failure) without reloading the page.
   const [retryNonce, setRetryNonce] = useState(0);
 
-  const esRef = useRef<EventSource | null>(null);
+  const ablyRef = useRef<Ably.Realtime | null>(null);
+  const channelRef = useRef<Ably.RealtimeChannel | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const pcsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
   const audiosRef = useRef<Map<string, HTMLAudioElement>>(new Map());
-  const selfIdRef = useRef<string>("self");
+  const membersRef = useRef<Map<string, PeerUser>>(new Map());
+  const selfIdRef = useRef<string>("self"); // our Ably connectionId once connected
   const acRef = useRef<AudioContext | null>(null);
   const analysersRef = useRef<Map<string, AnalyserNode>>(new Map());
   const deafenedRef = useRef(false);
+  const iceConfigRef = useRef<RTCConfiguration>(ICE_CONFIG);
+  const userRef = useRef<PeerUser | null>(user);
+  userRef.current = user;
 
-  // POST a signaling message to the relay (from = our peer id).
-  const post = useCallback((body: Record<string, unknown>) => {
-    fetch("/api/signal/send", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...body, from: selfIdRef.current }),
-      keepalive: true,
-    }).catch(() => {});
-  }, []);
+  // ---- channel publish helpers --------------------------------------------
+  function sendSignal(to: string, data: unknown) {
+    channelRef.current?.publish("signal", { to, from: selfIdRef.current, data }).catch(() => {});
+  }
+  function sendState(isMuted: boolean) {
+    channelRef.current?.publish("state", { from: selfIdRef.current, muted: isMuted }).catch(() => {});
+  }
 
   // ---- speaking detection -------------------------------------------------
   useEffect(() => {
@@ -98,17 +111,23 @@ export function useVoiceRoom(roomId: string | null) {
     analysersRef.current.set(id, an);
   }
 
-  function createPeer(peerId: string, user: PeerUser, initiator: boolean): RTCPeerConnection {
+  function createPeer(peerId: string, peerUser: PeerUser, initiator: boolean): RTCPeerConnection {
     const existing = pcsRef.current.get(peerId);
     if (existing) return existing;
 
-    const pc = new RTCPeerConnection(ICE_CONFIG);
+    const pc = new RTCPeerConnection(iceConfigRef.current);
     pcsRef.current.set(peerId, pc);
 
-    localStreamRef.current?.getTracks().forEach((t) => pc.addTrack(t, localStreamRef.current!));
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((t) => pc.addTrack(t, localStreamRef.current!));
+    } else {
+      // Listen-only: nothing to send, but still negotiate an audio m-line so we
+      // receive everyone else.
+      pc.addTransceiver("audio", { direction: "recvonly" });
+    }
 
     pc.onicecandidate = (e) => {
-      if (e.candidate) post({ type: "signal", to: peerId, data: { candidate: e.candidate } });
+      if (e.candidate) sendSignal(peerId, { candidate: e.candidate });
     };
 
     pc.ontrack = (e) => {
@@ -126,28 +145,31 @@ export function useVoiceRoom(roomId: string | null) {
     };
 
     setPeers((prev) =>
-      prev.some((p) => p.id === peerId) ? prev : [...prev, { id: peerId, user, muted: false }],
+      prev.some((p) => p.id === peerId) ? prev : [...prev, { id: peerId, user: peerUser, muted: false }],
     );
 
     if (initiator) {
       pc.createOffer()
         .then((offer) => pc.setLocalDescription(offer).then(() => offer))
-        .then((offer) => post({ type: "signal", to: peerId, data: { sdp: offer } }))
+        .then((offer) => sendSignal(peerId, { sdp: offer }))
         .catch((err) => console.error("offer failed:", err));
     }
     return pc;
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async function onSignal(from: string, data: any, knownUser?: PeerUser) {
+  async function onSignal(from: string, data: any) {
     let pc = pcsRef.current.get(from);
     if (data.sdp) {
-      if (!pc) pc = createPeer(from, knownUser ?? { id: from, name: "Guest", avatar: null }, false);
+      if (!pc) {
+        const u = membersRef.current.get(from) ?? { id: from, name: "Guest", avatar: null };
+        pc = createPeer(from, u, false);
+      }
       await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
       if (data.sdp.type === "offer") {
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        post({ type: "signal", to: from, data: { sdp: answer } });
+        sendSignal(from, { sdp: answer });
       }
     } else if (data.candidate && pc) {
       try {
@@ -167,6 +189,7 @@ export function useVoiceRoom(roomId: string | null) {
       audiosRef.current.delete(peerId);
     }
     analysersRef.current.delete(peerId);
+    membersRef.current.delete(peerId);
     setPeers((prev) => prev.filter((p) => p.id !== peerId));
     setSpeaking((prev) => {
       const n = { ...prev };
@@ -175,15 +198,24 @@ export function useVoiceRoom(roomId: string | null) {
     });
   }
 
-  function resetPeers() {
-    pcsRef.current.forEach((pc) => pc.close());
-    pcsRef.current.clear();
-    audiosRef.current.forEach((el) => (el.srcObject = null));
-    audiosRef.current.clear();
-    for (const id of [...analysersRef.current.keys()]) {
-      if (id !== "self") analysersRef.current.delete(id);
-    }
-    setPeers([]);
+  function presenceUser(m: Ably.PresenceMessage): PeerUser {
+    const data = (m.data ?? {}) as { name?: string; avatar?: string | null };
+    return {
+      id: m.clientId ?? m.connectionId ?? "guest",
+      name: data.name ?? "Guest",
+      avatar: data.avatar ?? null,
+    };
+  }
+
+  // Connect to (or learn about) a peer. A deterministic rule — the higher
+  // connectionId initiates — means both sides independently agree on exactly
+  // one offerer, regardless of who joined first (no glare).
+  function discover(m: Ably.PresenceMessage) {
+    const id = m.connectionId;
+    if (!id || id === selfIdRef.current) return;
+    const u = presenceUser(m);
+    membersRef.current.set(id, u);
+    createPeer(id, u, selfIdRef.current > id);
   }
 
   // ---- connect / teardown -------------------------------------------------
@@ -200,76 +232,148 @@ export function useVoiceRoom(roomId: string | null) {
     setError(null);
 
     (async () => {
-      let stream: MediaStream;
+      // Try for a mic, but never block joining on it. If it's unavailable
+      // (denied, dismissed, no device, or an insecure context where
+      // mediaDevices is undefined) we connect in listen-only mode instead.
+      let stream: MediaStream | null = null;
       try {
-        // This is what surfaces the browser's "Allow microphone?" prompt. If the
-        // user previously dismissed it, calling again re-prompts; if they hard-
-        // blocked it, it throws immediately and we guide them to unblock.
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      } catch (err) {
-        if (!cancelled) {
-          setError(await micErrorMessage(err));
-          setStatus("error");
-        }
-        return;
+        stream = (await navigator.mediaDevices?.getUserMedia({ audio: true, video: false })) ?? null;
+      } catch {
+        stream = null;
       }
       if (cancelled) {
-        stream.getTracks().forEach((t) => t.stop());
+        stream?.getTracks().forEach((t) => t.stop());
         return;
       }
       localStreamRef.current = stream;
-      attachAnalyser("self", stream);
+      setHasMic(!!stream);
+      if (stream) {
+        attachAnalyser("self", stream);
+      } else {
+        setMuted(true); // no mic to transmit
+      }
 
-      const es = new EventSource(`/api/signal/stream?room=${encodeURIComponent(roomId)}`);
-      esRef.current = es;
-
-      es.onmessage = (ev) => {
-        const msg = JSON.parse(ev.data);
-        switch (msg.type) {
-          case "joined":
-            selfIdRef.current = msg.selfId;
-            resetPeers(); // rebuild cleanly (also handles reconnects)
-            setStatus("connected");
-            for (const p of msg.peers as { id: string; user: PeerUser }[]) {
-              createPeer(p.id, p.user, true);
-            }
-            break;
-          case "peer-join":
-            createPeer(msg.peer.id, msg.peer.user, false);
-            break;
-          case "signal":
-            onSignal(msg.from, msg.data);
-            break;
-          case "peer-leave":
-            removePeer(msg.id);
-            break;
-          case "peer-state":
-            setPeers((prev) => prev.map((p) => (p.id === msg.id ? { ...p, muted: msg.muted } : p)));
-            break;
-          case "error":
-            setError(msg.message);
-            setStatus("error");
-            es.close(); // stop EventSource from reconnecting into the error
-            break;
+      // Pull ICE servers (incl. TURN, if configured) before any peer arrives.
+      try {
+        const res = await fetch("/api/ice", { cache: "no-store" });
+        const data = await res.json();
+        if (Array.isArray(data?.iceServers) && data.iceServers.length) {
+          iceConfigRef.current = { iceServers: data.iceServers };
         }
-      };
+      } catch {
+        /* fall back to the bundled STUN-only config */
+      }
+      if (cancelled) {
+        stream?.getTracks().forEach((t) => t.stop());
+        return;
+      }
 
-      es.onerror = () => {
-        if (es.readyState === EventSource.CLOSED && !cancelled) {
-          setError("Lost connection to the voice server.");
+      // Preflight the token so room-full / expired / not-signed-in produce a
+      // clear message instead of an opaque connection failure.
+      try {
+        const tr = await fetch(`/api/ably-token?room=${encodeURIComponent(roomId)}`, { cache: "no-store" });
+        if (!tr.ok) {
+          const d = await tr.json().catch(() => null);
+          if (!cancelled) {
+            setError(d?.error ?? "Couldn't join this room.");
+            setStatus("error");
+          }
+          return;
+        }
+      } catch {
+        if (!cancelled) {
+          setError("Couldn't reach the voice server.");
           setStatus("error");
         }
-      };
+        return;
+      }
+      if (cancelled) return;
+
+      const client = new Ably.Realtime({
+        echoMessages: false, // don't receive our own published messages
+        authCallback: async (_params, cb) => {
+          try {
+            const r = await fetch(`/api/ably-token?room=${encodeURIComponent(roomId)}`, { cache: "no-store" });
+            const d = await r.json();
+            if (!r.ok) return cb(d?.error ?? "auth failed", null);
+            cb(null, d);
+          } catch (e) {
+            cb(e instanceof Error ? e.message : "auth failed", null);
+          }
+        },
+      });
+      ablyRef.current = client;
+      const channel = client.channels.get(`room:${roomId}`);
+      channelRef.current = channel;
+
+      // Signaling messages addressed to us.
+      channel.subscribe("signal", (msg) => {
+        const d = msg.data as { to: string; from: string; data: unknown };
+        if (d.to !== selfIdRef.current) return;
+        onSignal(d.from, d.data);
+      });
+      // Mute-state broadcasts from peers.
+      channel.subscribe("state", (msg) => {
+        const d = msg.data as { from: string; muted: boolean };
+        if (d.from === selfIdRef.current) return;
+        setPeers((prev) => prev.map((p) => (p.id === d.from ? { ...p, muted: d.muted } : p)));
+      });
+
+      // Presence = who's in the room.
+      channel.presence.subscribe("enter", (m) => discover(m));
+      channel.presence.subscribe("update", (m) => discover(m));
+      channel.presence.subscribe("leave", (m) => m.connectionId && removePeer(m.connectionId));
+
+      client.connection.on("failed", (sc) => {
+        if (!cancelled) {
+          setError(sc.reason?.message ?? "Voice connection failed.");
+          setStatus("error");
+        }
+      });
+      client.connection.on("suspended", () => {
+        if (!cancelled) setStatus("connecting"); // Ably keeps retrying
+      });
+
+      // Once connected: enter presence, then offer to everyone already here.
+      client.connection.once("connected", () => {
+        if (cancelled) return;
+        selfIdRef.current = client.connection.id ?? "self";
+        const me = userRef.current;
+        (async () => {
+          try {
+            await channel.presence.enter({ name: me?.name ?? "Guest", avatar: me?.avatar ?? null });
+            const members = await channel.presence.get();
+            if (cancelled) return;
+            setStatus("connected");
+            for (const m of members) discover(m);
+          } catch {
+            if (!cancelled) {
+              setError("Couldn't join the room channel.");
+              setStatus("error");
+            }
+          }
+        })();
+      });
     })();
 
     return () => {
       cancelled = true;
-      esRef.current?.close();
+      try {
+        channelRef.current?.presence.leave();
+      } catch {
+        /* not entered */
+      }
+      channelRef.current?.unsubscribe();
+      channelRef.current?.presence.unsubscribe();
+      ablyRef.current?.close();
+      channelRef.current = null;
+      ablyRef.current = null;
       pcsRef.current.forEach((pc) => pc.close());
       pcsRef.current.clear();
       audiosRef.current.forEach((el) => (el.srcObject = null));
       audiosRef.current.clear();
       analysersRef.current.clear();
+      membersRef.current.clear();
       localStreamRef.current?.getTracks().forEach((t) => t.stop());
       acRef.current?.close().catch(() => {});
       acRef.current = null;
@@ -279,14 +383,15 @@ export function useVoiceRoom(roomId: string | null) {
 
   // ---- controls -----------------------------------------------------------
   const toggleMute = useCallback(() => {
+    if (!localStreamRef.current) return; // listen-only — nothing to mute
     setMuted((m) => {
       const next = !m;
       const track = localStreamRef.current?.getAudioTracks()[0];
       if (track) track.enabled = !next;
-      post({ type: "state", muted: next });
+      sendState(next);
       return next;
     });
-  }, [post]);
+  }, []);
 
   // Re-attempt the connection — chiefly to re-trigger the mic permission
   // prompt after a failure, without forcing a full page reload.
@@ -305,11 +410,11 @@ export function useVoiceRoom(roomId: string | null) {
         const track = localStreamRef.current?.getAudioTracks()[0];
         if (track) track.enabled = false;
         setMuted(true);
-        post({ type: "state", muted: true });
+        sendState(true);
       }
       return next;
     });
-  }, [post]);
+  }, []);
 
   return {
     status,
@@ -319,38 +424,9 @@ export function useVoiceRoom(roomId: string | null) {
     muted,
     deafened,
     speaking,
+    hasMic,
     toggleMute,
     toggleDeafen,
     retry,
   };
-}
-
-// Turn a getUserMedia rejection into a friendly, actionable message. When the
-// prompt was hard-blocked we say how to unblock; when it was merely dismissed
-// (state still "prompt") we tell them to try again and choose Allow.
-async function micErrorMessage(err: unknown): Promise<string> {
-  const name = (err as DOMException | undefined)?.name;
-
-  if (name === "NotAllowedError" || name === "SecurityError") {
-    let state: PermissionState | null = null;
-    try {
-      const res = await navigator.permissions?.query({
-        name: "microphone" as PermissionName,
-      });
-      state = res?.state ?? null;
-    } catch {
-      /* Permissions API unsupported (e.g. some Safari versions) — fall through */
-    }
-    if (state === "denied") {
-      return "Microphone access is blocked. Open this site's permissions (tap the lock or “aA” icon next to the address bar), allow the microphone, then tap Try again.";
-    }
-    return "We need your microphone to connect you. Tap Try again and choose Allow when your browser asks.";
-  }
-  if (name === "NotFoundError" || name === "OverconstrainedError") {
-    return "No microphone was found. Connect one or check your device settings, then tap Try again.";
-  }
-  if (name === "NotReadableError") {
-    return "Your microphone is being used by another app. Close it, then tap Try again.";
-  }
-  return "We couldn't access your microphone. Check that your browser allows it, then tap Try again.";
 }

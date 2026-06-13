@@ -57,7 +57,7 @@ export default function VoiceProvider({
 }) {
   const [activeRoom, setActiveRoom] = useState<RoomMeta | null>(null);
   const [resumeRoomId, setResumeRoomId] = useState<string | null>(null);
-  const voice = useVoiceRoom(activeRoom?.id ?? null);
+  const voice = useVoiceRoom(activeRoom?.id ?? null, user);
 
   // On first load, recover the room we were in (for the rejoin prompt).
   useEffect(() => {

@@ -2,9 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Mic, MicOff, Volume2, VolumeX, PhoneOff, Link2, Search, Radio, AlertTriangle } from "lucide-react";
+import { Mic, MicOff, Volume2, VolumeX, PhoneOff, Link2, Search, Radio } from "lucide-react";
 import { roomTheme } from "@/lib/voice-rooms";
-import { useMicPermission } from "@/lib/useMicPermission";
 import { useVoice } from "./VoiceProvider";
 import RoomIcon from "./RoomIcon";
 
@@ -117,29 +116,21 @@ function PreJoin({
   count: number; limit: number; expiresAt?: number; onJoin: () => void;
 }) {
   const full = count >= limit;
-  const micPerm = useMicPermission();
-  const micBlocked = micPerm === "denied";
-  const needsPrompt = micPerm === "prompt";
-  const [requesting, setRequesting] = useState(false);
+  const [joining, setJoining] = useState(false);
 
-  // Calling getUserMedia from this click is what surfaces the browser's
-  // "Allow microphone?" dialog. When it's still in the "prompt" state we ask
-  // first and only continue into the room once the user allows it — so a
-  // dismissed prompt leaves them here (with guidance) instead of erroring out.
-  async function requestAndJoin() {
-    if (!needsPrompt) {
-      onJoin(); // granted / unknown / blocked → let the connect flow handle it
-      return;
-    }
-    setRequesting(true);
+  // Best-effort: ask for the mic from within this tap (mobile browsers only
+  // raise the dialog from a user gesture). Either way we join — if the mic
+  // isn't granted, the room runs in listen-only mode.
+  async function join() {
+    if (full) return;
+    setJoining(true);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      stream.getTracks().forEach((t) => t.stop()); // release; the room re-acquires it
-      onJoin();
+      const stream = await navigator.mediaDevices?.getUserMedia({ audio: true, video: false });
+      stream?.getTracks().forEach((t) => t.stop()); // release; the room re-acquires it
     } catch {
-      /* dismissed/blocked — useMicPermission updates and guidance shows below */
+      /* no mic — join and listen */
     } finally {
-      setRequesting(false);
+      onJoin();
     }
   }
 
@@ -156,42 +147,17 @@ function PreJoin({
         {expiresAt ? " · expires in " + hoursLeft(expiresAt) : ""}
       </p>
 
-      {micBlocked && (
-        <div className="mt-6 w-full animate-fade-up rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-left text-sm text-amber-200/90 [animation-delay:150ms]">
-          <div className="flex items-center gap-2 font-semibold text-amber-200">
-            <AlertTriangle size={16} /> Microphone is blocked
-          </div>
-          <p className="mt-1.5 text-amber-200/80">
-            Tap the lock or &ldquo;aA&rdquo; icon next to the address bar, allow
-            the microphone for this site, and this will update automatically.
-          </p>
-        </div>
-      )}
-
       <button
-        onClick={requestAndJoin}
-        disabled={full || requesting}
+        onClick={join}
+        disabled={full || joining}
         className="btn-primary mt-8 inline-flex w-full items-center justify-center gap-2 py-4 text-base animate-fade-up [animation-delay:180ms]"
       >
-        <Mic size={18} />{" "}
-        {full
-          ? "Room is full"
-          : requesting
-            ? "Waiting for mic…"
-            : needsPrompt
-              ? "Allow mic & join"
-              : micBlocked
-                ? "Join anyway"
-                : "Join voice"}
+        <Mic size={18} /> {full ? "Room is full" : joining ? "Joining…" : "Join voice"}
       </button>
       <p className="mt-3 text-xs text-slate-500">
         {full
           ? "Try again when someone leaves."
-          : micBlocked
-            ? "Allow the microphone above, then join — it's required to connect."
-            : needsPrompt
-              ? "Your browser will ask to use the microphone — choose Allow."
-              : "We'll ask for microphone access to connect you."}
+          : "We'll ask for your microphone — allow it to talk, or join to just listen."}
       </p>
     </div>
   );
@@ -208,6 +174,18 @@ function RoomStage({
   const total = v.peers.length + 1;
   const [copied, setCopied] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+
+  // Turn on the mic from a tap (the only reliable way to raise the prompt on
+  // mobile), then reconnect so it's published to everyone.
+  async function enableMic() {
+    try {
+      const stream = await navigator.mediaDevices?.getUserMedia({ audio: true, video: false });
+      stream?.getTracks().forEach((t) => t.stop());
+      v.retry();
+    } catch {
+      /* still unavailable — stays listen-only */
+    }
+  }
 
   function copyCode() {
     if (!code) return;
@@ -240,6 +218,12 @@ function RoomStage({
           {total}/{limit} in voice
         </div>
 
+        {v.status === "connected" && !v.hasMic && (
+          <p className="mt-3 max-w-sm text-sm text-amber-300/80">
+            You&apos;re listening only — your mic is off. Tap the mic button below to enable it.
+          </p>
+        )}
+
         <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
           {code && (
             <button
@@ -264,7 +248,7 @@ function RoomStage({
       </div>
 
       <div className="mt-12 grid grid-cols-2 gap-6 sm:grid-cols-3 md:grid-cols-4">
-        <Tile name={me.name} avatar={me.avatar} speaking={!v.muted && !!v.speaking["self"]} muted={v.muted} isSelf />
+        <Tile name={me.name} avatar={me.avatar} speaking={v.hasMic && !v.muted && !!v.speaking["self"]} muted={!v.hasMic || v.muted} isSelf />
         {v.peers.map((p) => (
           <Tile key={p.id} name={p.user.name} avatar={p.user.avatar} speaking={!p.muted && !!v.speaking[p.id]} muted={p.muted} />
         ))}
@@ -272,9 +256,15 @@ function RoomStage({
 
       <div className="fixed inset-x-0 bottom-[calc(1.25rem_+_env(safe-area-inset-bottom))] z-30 flex justify-center px-4 sm:bottom-7">
         <div className="glass flex items-center gap-3 px-4 py-3 shadow-glow">
-          <CtrlBtn onClick={v.toggleMute} label={v.muted ? "Unmute" : "Mute"} danger={v.muted} active={!v.muted}>
-            {v.muted ? <MicOff size={20} /> : <Mic size={20} />}
-          </CtrlBtn>
+          {v.hasMic ? (
+            <CtrlBtn onClick={v.toggleMute} label={v.muted ? "Unmute" : "Mute"} danger={v.muted} active={!v.muted}>
+              {v.muted ? <MicOff size={20} /> : <Mic size={20} />}
+            </CtrlBtn>
+          ) : (
+            <CtrlBtn onClick={enableMic} label="Enable microphone" danger active={false}>
+              <MicOff size={20} />
+            </CtrlBtn>
+          )}
           <CtrlBtn onClick={v.toggleDeafen} label={v.deafened ? "Undeafen" : "Deafen"} danger={v.deafened} active={!v.deafened}>
             {v.deafened ? <VolumeX size={20} /> : <Volume2 size={20} />}
           </CtrlBtn>
