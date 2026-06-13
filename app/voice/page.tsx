@@ -4,6 +4,7 @@ import Header from "@/components/Header";
 import VoiceRoomsList from "@/components/VoiceRoomsList";
 import CreateRoomFab from "@/components/CreateRoomFab";
 import DisclaimerButton from "@/components/DisclaimerButton";
+import MicGate from "@/components/MicGate";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +27,7 @@ export default async function LobbyPage() {
             time, or game night.
           </p>
         </div>
+        <MicGate />
         <VoiceRoomsList />
         <div className="mt-14 flex justify-center">
           <DisclaimerButton />
