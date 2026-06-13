@@ -66,7 +66,7 @@ export default function EditRoomModal({
       <form
         onClick={(e) => e.stopPropagation()}
         onSubmit={save}
-        className="glass w-full max-w-md animate-fade-up p-6"
+        className="glass max-h-[calc(100dvh_-_2rem)] w-full max-w-md animate-fade-up overflow-y-auto overscroll-contain p-6"
       >
         <div className="flex items-center gap-3">
           <RoomIcon emoji={emoji} image={image.trim() || null} gradient={room.gradient} size="md" />

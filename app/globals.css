@@ -25,6 +25,17 @@
     scrollbar-width: thin;
     scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
   }
+
+  /* iOS Safari auto-zooms when focusing a control whose text is < 16px. Force
+     16px on small screens (the class selector beats the .text-sm utility), and
+     hand sizing back to the utility classes from sm: up. */
+  @media (max-width: 639px) {
+    input:not([type="checkbox"]):not([type="radio"]),
+    textarea,
+    select {
+      font-size: 16px;
+    }
+  }
 }
 
 @layer components {

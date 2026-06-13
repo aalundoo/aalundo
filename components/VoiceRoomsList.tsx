@@ -215,12 +215,12 @@ function RoomCard({
       <div className={`pointer-events-none absolute -right-10 -top-10 h-32 w-32 rounded-full bg-gradient-to-br ${room.gradient} opacity-20 blur-2xl transition-opacity duration-300 group-hover:opacity-40`} />
 
       <div className="pointer-events-none relative z-[1]">
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-4">
             <RoomIcon emoji={room.emoji} image={room.image} gradient={room.gradient} size="md" />
-            <div>
-              <div className="font-semibold text-slate-100">{room.name}</div>
-              <div className="text-sm text-slate-400">
+            <div className="min-w-0">
+              <div className="truncate font-semibold text-slate-100">{room.name}</div>
+              <div className="truncate text-sm text-slate-400">
                 {room.custom && room.expiresAt
                   ? `Expires in ${hoursLeft(room.expiresAt)}`
                   : room.description}
@@ -289,7 +289,7 @@ function IconBtn({
       }}
       aria-label={label}
       title={label}
-      className={`pointer-events-auto flex h-7 w-7 items-center justify-center rounded-lg border transition-colors ${
+      className={`pointer-events-auto flex h-8 w-8 items-center justify-center rounded-lg border transition-colors ${
         active
           ? "border-live-500/40 bg-live-500/20 text-live-400"
           : danger

@@ -5,20 +5,22 @@ import LogoMark from "./LogoMark";
 export default function Header({ user }: { user: SessionData["user"] }) {
   return (
     <header className="sticky top-0 z-30 border-b border-white/5 bg-ink-950/70 backdrop-blur-xl">
-      <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-3.5">
-        <Link href="/" className="flex items-center gap-2 font-bold tracking-tight">
+      <div className="mx-auto flex max-w-5xl items-center justify-between gap-2 px-4 py-3.5 sm:px-6">
+        <Link href="/" className="flex shrink-0 items-center gap-2 font-bold tracking-tight">
           <LogoMark className="h-7 w-7" />
           Aalundo
         </Link>
 
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <Link
             href="/profile"
             title="Profile"
-            className="flex items-center gap-2 rounded-full border border-white/10 bg-white/5 py-1 pl-1 pr-3 transition-colors hover:bg-white/10"
+            className="flex min-w-0 items-center gap-2 rounded-full border border-white/10 bg-white/5 py-1 pl-1 pr-3 transition-colors hover:bg-white/10"
           >
             <Avatar name={user.name} avatar={user.avatar} />
-            <span className="text-sm font-medium text-slate-200">{user.name}</span>
+            <span className="max-w-[32vw] truncate text-sm font-medium text-slate-200 sm:max-w-[12rem]">
+              {user.name}
+            </span>
           </Link>
           <a
             href="/api/auth/logout"

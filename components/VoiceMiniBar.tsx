@@ -133,7 +133,7 @@ function Bar({
   children: React.ReactNode;
 }) {
   return (
-    <div className="fixed inset-x-0 bottom-5 z-40 flex justify-center px-4">
+    <div className="fixed inset-x-0 bottom-[calc(1.25rem_+_env(safe-area-inset-bottom))] z-40 flex justify-center px-4">
       <div className="glass flex w-full max-w-md items-center gap-3 px-3 py-2.5 shadow-glow">
         <RoomIcon emoji={emoji} image={image} gradient={gradient} size="sm" />
         <div className="flex flex-1 items-center justify-between gap-3">{children}</div>

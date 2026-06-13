@@ -41,7 +41,7 @@ export default async function VoiceRoomPage({
     const room = await getRoom(params.room).catch(() => null);
     const theme = roomTheme(params.room);
     return (
-      <main className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center px-6 text-center">
+      <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col items-center justify-center px-6 text-center">
         <Link href="/" className="mb-10 flex items-center gap-2 font-bold tracking-tight">
           <LogoMark className="h-8 w-8" /> Aalundo
         </Link>
@@ -74,7 +74,7 @@ export default async function VoiceRoomPage({
   }
 
   return (
-    <main className="relative min-h-screen">
+    <main className="relative min-h-[100dvh]">
       <div className="mx-auto max-w-4xl px-6 py-6">
         <Link href="/voice" className="inline-flex items-center gap-1.5 text-sm text-slate-400 transition-colors hover:text-slate-200">
           ← Lobby

@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { getSession } from "@/lib/session";
@@ -14,6 +14,15 @@ export const metadata: Metadata = {
     "Casual chats, business brainstorms, study sessions, game nights — drop into a live voice room in your browser. No app required.",
 };
 
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  themeColor: "#08080c",
+  // Let content extend under the notch/home indicator so we can pad with the
+  // env(safe-area-inset-*) values on fixed bars.
+  viewportFit: "cover",
+};
+
 export default async function RootLayout({
   children,
 }: {
@@ -24,7 +33,7 @@ export default async function RootLayout({
 
   return (
     <html lang="en" className={inter.variable}>
-      <body className="min-h-screen font-sans">
+      <body className="min-h-[100dvh] font-sans">
         <VoiceProvider user={session?.user ?? null} isAdmin={admin}>
           {children}
         </VoiceProvider>

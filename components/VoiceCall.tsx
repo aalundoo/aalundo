@@ -206,7 +206,7 @@ function RoomStage({
         ))}
       </div>
 
-      <div className="fixed inset-x-0 bottom-7 z-30 flex justify-center px-6">
+      <div className="fixed inset-x-0 bottom-[calc(1.25rem_+_env(safe-area-inset-bottom))] z-30 flex justify-center px-4 sm:bottom-7">
         <div className="glass flex items-center gap-3 px-4 py-3 shadow-glow">
           <CtrlBtn onClick={v.toggleMute} label={v.muted ? "Unmute" : "Mute"} danger={v.muted} active={!v.muted}>
             {v.muted ? <MicOff size={20} /> : <Mic size={20} />}

@@ -4,9 +4,14 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Plus, Minus } from "lucide-react";
 import { MAX_LIMIT as MAX } from "@/lib/rooms-data.mjs";
+import { useVoice } from "./VoiceProvider";
 
 export default function CreateRoomFab() {
   const router = useRouter();
+  const { activeRoom, resumeRoomId } = useVoice();
+  // The mini-bar sits at the bottom and, on narrow screens, spans most of the
+  // width — lift the FAB above it so they don't collide.
+  const liftedForMiniBar = !!activeRoom || !!resumeRoomId;
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [image, setImage] = useState("");
@@ -49,7 +54,11 @@ export default function CreateRoomFab() {
       <button
         onClick={() => setOpen(true)}
         aria-label="Create a room"
-        className="group fixed bottom-7 right-7 z-40 flex items-center gap-0 overflow-hidden rounded-full bg-gradient-to-br from-brand-500 to-accent-500 px-5 py-5 text-white shadow-glow transition-all duration-300 hover:gap-2 hover:pr-6 active:scale-95"
+        className={`group fixed right-[calc(1rem_+_env(safe-area-inset-right))] z-40 flex items-center gap-0 overflow-hidden rounded-full bg-gradient-to-br from-brand-500 to-accent-500 px-5 py-5 text-white shadow-glow transition-all duration-300 hover:gap-2 hover:pr-6 active:scale-95 sm:right-7 sm:bottom-7 ${
+          liftedForMiniBar
+            ? "bottom-[calc(6rem_+_env(safe-area-inset-bottom))] sm:bottom-7"
+            : "bottom-[calc(1.25rem_+_env(safe-area-inset-bottom))]"
+        }`}
       >
         <Plus size={22} strokeWidth={2.5} />
         <span className="max-w-0 overflow-hidden whitespace-nowrap text-sm font-semibold transition-all duration-300 group-hover:max-w-[8rem]">
@@ -66,7 +75,7 @@ export default function CreateRoomFab() {
           <form
             onClick={(e) => e.stopPropagation()}
             onSubmit={create}
-            className="glass w-full max-w-md animate-fade-up p-6"
+            className="glass max-h-[calc(100dvh_-_2rem)] w-full max-w-md animate-fade-up overflow-y-auto overscroll-contain p-6"
           >
             <div className="flex items-center gap-3">
               <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-brand-500 to-accent-500 text-xl shadow-glow">

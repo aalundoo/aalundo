@@ -19,7 +19,7 @@ export default async function LandingPage() {
   const isLoggedIn = !!session;
 
   return (
-    <main className="relative flex min-h-screen flex-col overflow-hidden">
+    <main className="relative flex min-h-[100dvh] flex-col overflow-hidden">
       <div className="pointer-events-none absolute inset-0 -z-10">
         <div className="absolute left-1/2 top-[-12rem] h-[34rem] w-[34rem] -translate-x-1/2 rounded-full bg-brand-600/25 blur-[120px] animate-float" />
         <div className="absolute right-[-6rem] top-40 h-72 w-72 rounded-full bg-accent-500/20 blur-[100px] animate-float [animation-delay:-3s]" />
